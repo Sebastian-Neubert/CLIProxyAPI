@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,31 +102,69 @@ func sortSoonestResetCandidates(ranked []SoonestResetCandidate) {
 }
 
 // SoonestResetPreviewCandidate extends a ranked credential with its
-// credential-level availability for management views.
+// availability for management views.
 type SoonestResetPreviewCandidate struct {
 	SoonestResetCandidate
 	// Available reports whether the credential is selectable right now in the
-	// highest available priority tier (model-specific cooldowns are ignored).
+	// highest available priority tier. Model-specific cooldowns only count
+	// when the preview is requested for a model.
 	Available bool
+	// ModelCooldowns lists the models this credential is currently blocked
+	// for, independent of the requested model.
+	ModelCooldowns []ModelCooldown
+}
+
+// ModelCooldown is an active per-model block of a credential.
+type ModelCooldown struct {
+	Model string
+	// Until is the recovery time, zero when upstream gave none.
+	Until time.Time
+	// Quota reports whether the block is a quota (429-style) cooldown.
+	Quota bool
 }
 
 // PreviewSoonestReset ranks one provider's credentials the way
-// SoonestResetSelector would for a model-agnostic request. preferredID is the
-// credential a new session would bind to; it is empty when no available
-// credential has a known reset, in which case unknown credentials rotate.
-func PreviewSoonestReset(auths []*Auth, provider string, now time.Time) (ranked []SoonestResetPreviewCandidate, preferredID string) {
+// SoonestResetSelector would. With an empty model the preview is
+// model-agnostic; otherwise availability also honors that model's cooldowns.
+// preferredID is the credential a new session would bind to; it is empty when
+// no available credential has a known reset, in which case unknown
+// credentials rotate.
+func PreviewSoonestReset(auths []*Auth, provider, model string, now time.Time) (ranked []SoonestResetPreviewCandidate, preferredID string) {
 	availableIDs := make(map[string]struct{})
-	if available, err := getAvailableAuths(auths, provider, "", now); err == nil {
+	if available, err := getAvailableAuths(auths, provider, strings.TrimSpace(model), now); err == nil {
 		for _, auth := range available {
 			availableIDs[auth.ID] = struct{}{}
 		}
 	}
 	for _, candidate := range RankAuthsBySoonestReset(auths, now) {
 		_, available := availableIDs[candidate.Auth.ID]
-		ranked = append(ranked, SoonestResetPreviewCandidate{SoonestResetCandidate: candidate, Available: available})
+		ranked = append(ranked, SoonestResetPreviewCandidate{
+			SoonestResetCandidate: candidate,
+			Available:             available,
+			ModelCooldowns:        activeModelCooldowns(candidate.Auth, now),
+		})
 		if available && preferredID == "" && !candidate.ResetAt.IsZero() {
 			preferredID = candidate.Auth.ID
 		}
 	}
 	return ranked, preferredID
+}
+
+func activeModelCooldowns(auth *Auth, now time.Time) []ModelCooldown {
+	if auth == nil || len(auth.ModelStates) == 0 {
+		return nil
+	}
+	var out []ModelCooldown
+	for model, state := range auth.ModelStates {
+		if state == nil {
+			continue
+		}
+		blocked, reason, until := availabilityBlock(state.Unavailable, state.Quota.Exceeded, state.NextRetryAfter, state.Quota.NextRecoverAt, now)
+		if !blocked {
+			continue
+		}
+		out = append(out, ModelCooldown{Model: model, Until: until, Quota: reason == blockReasonCooldown})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Model < out[j].Model })
+	return out
 }

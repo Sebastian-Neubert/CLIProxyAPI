@@ -580,6 +580,12 @@ type RoutingConfig struct {
 	//     keep the binding and return the error (or retry the same credential) instead.
 	// Ignored when SessionAffinity is false.
 	SessionAffinityRebindOn string `yaml:"session-affinity-rebind-on,omitempty" json:"session-affinity-rebind-on,omitempty"`
+
+	// StateFile is an optional JSON file that persists passive quota snapshots,
+	// quota history, and session affinity bindings across restarts. Relative
+	// paths resolve against the config file directory. Empty disables
+	// persistence; the history is then kept in memory only. Read at startup.
+	StateFile string `yaml:"state-file,omitempty" json:"state-file,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

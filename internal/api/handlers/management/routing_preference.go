@@ -81,6 +81,7 @@ func (h *Handler) GetRoutingPreference(c *gin.Context) {
 		}
 	}
 
+	model := strings.TrimSpace(c.Query("model"))
 	now := time.Now()
 	byProvider := make(map[string][]*coreauth.Auth)
 	for _, auth := range h.authManager.List() {
@@ -103,7 +104,7 @@ func (h *Handler) GetRoutingPreference(c *gin.Context) {
 	for _, provider := range providerNames {
 		auths := byProvider[provider]
 		sort.Slice(auths, func(i, j int) bool { return auths[i].ID < auths[j].ID })
-		ranked, preferredID := coreauth.PreviewSoonestReset(auths, provider, now)
+		ranked, preferredID := coreauth.PreviewSoonestReset(auths, provider, model, now)
 		candidates := make([]gin.H, 0, len(ranked))
 		for index, candidate := range ranked {
 			auth := candidate.Auth
@@ -123,6 +124,9 @@ func (h *Handler) GetRoutingPreference(c *gin.Context) {
 				item["reset_at"] = candidate.ResetAt.UTC()
 				item["window"] = candidate.Window
 			}
+			if cooldowns := modelCooldownsPayload(candidate.ModelCooldowns); len(cooldowns) > 0 {
+				item["model_cooldowns"] = cooldowns
+			}
 			candidates = append(candidates, item)
 		}
 		providers = append(providers, gin.H{
@@ -138,8 +142,24 @@ func (h *Handler) GetRoutingPreference(c *gin.Context) {
 		"session_affinity":           sessionAffinity,
 		"session_affinity_rebind_on": rebindOn,
 		"generated_at":               now.UTC(),
+		"model":                      model,
 		"providers":                  providers,
 	})
+}
+
+func modelCooldownsPayload(cooldowns []coreauth.ModelCooldown) []gin.H {
+	if len(cooldowns) == 0 {
+		return nil
+	}
+	payload := make([]gin.H, 0, len(cooldowns))
+	for _, cooldown := range cooldowns {
+		item := gin.H{"model": cooldown.Model, "quota": cooldown.Quota}
+		if !cooldown.Until.IsZero() {
+			item["until"] = cooldown.Until.UTC()
+		}
+		payload = append(payload, item)
+	}
+	return payload
 }
 
 func authDisplayName(auth *coreauth.Auth) string {
