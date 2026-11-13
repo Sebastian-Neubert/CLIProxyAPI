@@ -115,6 +115,39 @@ func TestRoutingStatePersisterKeepsPendingQuotaForLateAuths(t *testing.T) {
 	}
 }
 
+func TestRoutingStatePersisterReappliesQuotaAfterCredentialReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "routing-state.json")
+	now := time.Now().Truncate(time.Second)
+	manager, _ := newAffinityManager()
+	registerStateAuth(t, manager, &coreauth.Auth{ID: "cfg-claude", Provider: "claude",
+		Quota: coreauth.QuotaState{ObservedAt: now, Signals: claudeStateSignals("0.3", now.Add(24*time.Hour))}})
+	writer := newRoutingStatePersister(path, manager, quotahistory.NewStore())
+	writer.now = func() time.Time { return now }
+	writer.tick()
+
+	restarted, _ := newAffinityManager()
+	registerStateAuth(t, restarted, &coreauth.Auth{ID: "cfg-claude", Provider: "claude"})
+	loader := newRoutingStatePersister(path, restarted, quotahistory.NewStore())
+	loader.now = func() time.Time { return now.Add(time.Minute) }
+	if errLoad := loader.load(); errLoad != nil {
+		t.Fatalf("load: %v", errLoad)
+	}
+	// The watcher re-synthesizes config-backed credentials after startup.
+	replacement := &coreauth.Auth{ID: "cfg-claude", Provider: "claude", Status: coreauth.StatusActive, Attributes: map[string]string{"runtime_only": "true"}}
+	if _, errUpdate := restarted.Update(coreauth.WithSkipPersist(context.Background()), replacement); errUpdate != nil {
+		t.Fatalf("Update: %v", errUpdate)
+	}
+	if got, _ := restarted.GetByID("cfg-claude"); len(got.Quota.Signals) != 0 {
+		t.Fatalf("replacement kept quota %+v; test no longer covers the drop", got.Quota)
+	}
+	loader.now = func() time.Time { return now.Add(2 * time.Minute) }
+	loader.tick()
+	got, _ := restarted.GetByID("cfg-claude")
+	if got.Quota.Signals["Anthropic-Ratelimit-Unified-7d-Utilization"] != "0.3" {
+		t.Fatalf("quota after replacement = %+v, want restored snapshot", got.Quota)
+	}
+}
+
 func TestRoutingStatePersisterSkipsUnchangedWrites(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "routing-state.json")
 	manager := coreauth.NewManager(nil, nil, nil)

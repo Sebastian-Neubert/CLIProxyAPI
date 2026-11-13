@@ -23,8 +23,8 @@ const (
 	// routingStateInterval is how often quota history is sampled and the
 	// state file is rewritten when it changed.
 	routingStateInterval = time.Minute
-	// routingStatePendingTTL bounds how long restored quota snapshots wait for
-	// their credential to be registered.
+	// routingStatePendingTTL bounds how long restored quota snapshots are
+	// re-applied to credentials that are registered or replaced after startup.
 	routingStatePendingTTL = 15 * time.Minute
 )
 
@@ -137,14 +137,13 @@ func (p *routingStatePersister) applyPendingQuota(now time.Time) int {
 	if len(p.pending) == 0 {
 		return 0
 	}
+	// Entries stay pending for the whole TTL: config-backed credentials are
+	// re-synthesized by the watcher after startup, which drops their passive
+	// quota, so the snapshot is re-applied while it is still the newest one.
 	applied := 0
 	for id, observation := range p.pending {
-		ok, registered := p.manager.RestoreQuotaObservation(id, observation)
-		if ok {
+		if ok, _ := p.manager.RestoreQuotaObservation(id, observation); ok {
 			applied++
-		}
-		if registered {
-			delete(p.pending, id)
 		}
 	}
 	if !now.Before(p.pendingUntil) {
