@@ -53,6 +53,9 @@ type Service struct {
 	// configPath is the path to the configuration file.
 	configPath string
 
+	// routingState samples quota history and persists routing state.
+	routingState *routingStatePersister
+
 	// tokenProvider handles loading token-based clients.
 	tokenProvider TokenClientProvider
 

@@ -181,7 +181,8 @@ routing:
   # expire unused is consumed first. Reset times come only from real upstream responses:
   # Claude "anthropic-ratelimit-unified-7d-reset" and Codex "x-codex-primary/secondary-*"
   # headers or websocket rate-limit events (the window with the largest window-minutes).
-  # They are kept in memory only, so after a restart every credential starts as "unknown".
+  # They are kept in memory unless routing.state-file is set; without it every credential
+  # starts as "unknown" after a restart.
   # Credentials without a known future reset rank after all known ones and rotate
   # round-robin among themselves. Cooldown, disabled and unavailable credentials are skipped.
   # Combine with session-affinity (rebind-on "quota" recommended) so an established thread
@@ -237,6 +238,12 @@ routing:
   #     keep the binding and return the error (or retry the same credential) instead.
   # Ignored when routing.session-affinity is false.
   session-affinity-rebind-on: "any"
+  # Optional JSON file that persists passive quota snapshots (reset times and used percent),
+  # a 28-day quota history (GET /v8/management/quota/history), and session affinity bindings
+  # across restarts. Relative paths resolve against this config file's directory. Read at
+  # startup and rewritten at most once per minute when it changed. Do not place it inside
+  # auth-dir. Empty (default) disables persistence; the history then lives in memory only.
+  # state-file: "state/routing-state.json"
 
   # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
   force-model-prefix: false

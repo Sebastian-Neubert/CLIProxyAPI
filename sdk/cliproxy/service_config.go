@@ -282,7 +282,10 @@ func (s *Service) applyManagerConfig(ctx context.Context, commit configCommit) b
 	}
 	routingState := normalizedRoutingRuntimeState(commit.cfg)
 	if s.appliedRoutingState == nil || *s.appliedRoutingState != routingState {
-		s.coreManager.SetSelector(newRoutingSelectorWithExisting(routingState, s.coreManager.Selector()))
+		existing := s.coreManager.Selector()
+		next := newRoutingSelectorWithExisting(routingState, existing)
+		carrySessionBindings(existing, next, time.Now())
+		s.coreManager.SetSelector(next)
 		s.appliedRoutingState = &routingState
 	}
 	s.applyRetryConfig(commit.cfg)
