@@ -175,7 +175,17 @@ access:
 
 # Routing strategy for selecting credentials when multiple match.
 routing:
-  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first
+  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, soonest-reset
+  # soonest-reset prefers, within the highest available priority tier, the credential whose
+  # long-running (>= 24h, i.e. weekly) subscription quota resets first, so quota that would
+  # expire unused is consumed first. Reset times come only from real upstream responses:
+  # Claude "anthropic-ratelimit-unified-7d-reset" and Codex "x-codex-primary/secondary-*"
+  # headers or websocket rate-limit events (the window with the largest window-minutes).
+  # They are kept in memory only, so after a restart every credential starts as "unknown".
+  # Credentials without a known future reset rank after all known ones and rotate
+  # round-robin among themselves. Cooldown, disabled and unavailable credentials are skipped.
+  # Combine with session-affinity (rebind-on "quota" recommended) so an established thread
+  # keeps its credential while it is usable instead of following the ranking per request.
   # weighted-round-robin uses each credential's integer weight (default 1, maximum 1,000,000).
   # Non-positive weights exclude the credential while this strategy is active.
   # Sticky requests (including inherited and LCP bindings) also consume weighted credits

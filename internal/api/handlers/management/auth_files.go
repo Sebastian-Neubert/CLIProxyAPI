@@ -691,6 +691,15 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quota authFileQu
 	if modelQuotas := modelQuotaObservationPayload(auth.Provider, auth.ModelStates); len(modelQuotas) > 0 {
 		entry["model_quotas"] = modelQuotas
 	}
+	if windows := quotaWindowsPayload(auth); len(windows) > 0 {
+		entry["quota_windows"] = windows
+	}
+	if reset := quotaResetPayload(auth, time.Now()); reset != nil {
+		entry["quota_reset"] = reset
+	}
+	if usage := tokenUsagePayload(auth.ID); usage != nil {
+		entry["token_usage"] = usage
+	}
 	if pluginID := quota.pluginIDs[strings.ToLower(strings.TrimSpace(auth.Provider))]; pluginID != "" {
 		entry["supports_quota"] = true
 		entry["quota_provider"] = auth.Provider
