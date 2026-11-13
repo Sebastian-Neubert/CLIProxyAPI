@@ -627,6 +627,7 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
 				body = markedBody
 			}
 		}
+		writeClaudeRetryDeadline(c, status, msg, handlers.PassthroughHeadersEnabled(h.CurrentConfig()))
 		appendClaudeAPIResponse(c, body)
 		if !c.Writer.Written() && c.Writer.Header().Get("Content-Type") == "" {
 			c.Writer.Header().Set("Content-Type", "application/json")
@@ -660,6 +661,7 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
 		}
 	}
 
+	writeClaudeRetryDeadline(c, status, msg, handlers.PassthroughHeadersEnabled(h.CurrentConfig()))
 	body, err := json.Marshal(h.toClaudeErrorWithRetryAfter(msg, retryAfter))
 	if err != nil {
 		body = []byte(`{"type":"error","error":{"type":"api_error","message":"Internal Server Error"}}`)
@@ -768,3 +770,53 @@ func appendClaudeAPIResponse(c *gin.Context, data []byte) {
 	}
 	c.Set("API_RESPONSE", bytes.Clone(data))
 }
+
+// writeClaudeRetryDeadline bridges Retry-After into the quota event understood
+// by Claude Code gateways. Never invent a five-hour or weekly subscription
+// window: a proxy pool cooldown can also represent a short request limit.
+// Like other unified quota headers it is only emitted when passthrough headers
+// are enabled.
+func writeClaudeRetryDeadline(c *gin.Context, status int, msg *interfaces.ErrorMessage, passthrough bool) {
+	if !passthrough || status != http.StatusTooManyRequests || c.Request == nil || !strings.HasSuffix(c.Request.URL.Path, "/v1/messages") {
+		return
+	}
+	headers := c.Writer.Header()
+	var cooldown interface{ IsModelCooldown() bool }
+	isCooldown := msg != nil && errors.As(msg.Error, &cooldown) && cooldown.IsModelCooldown()
+	if !isCooldown && headers.Get("Anthropic-Ratelimit-Unified-Reset") != "" {
+		return
+	}
+	now := time.Now()
+	raw := headers.Get("Retry-After")
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		deadline, dateErr := http.ParseTime(raw)
+		if dateErr != nil {
+			return
+		}
+		seconds = int64(deadline.Sub(now).Seconds())
+	}
+	if seconds <= 0 || seconds > 365*24*60*60 {
+		return
+	}
+	deadline := now.Unix() + seconds
+	// Keep unified headers already aligned with the trusted deadline, such as
+	// those synthesized by the cooldown error from captured rejected windows.
+	if existing, errExisting := strconv.ParseInt(headers.Get("Anthropic-Ratelimit-Unified-Reset"), 10, 64); errExisting == nil &&
+		existing >= deadline-claudeResetSkewSeconds && existing <= deadline+claudeResetSkewSeconds {
+		return
+	}
+	// A pool deadline supersedes stale per-account windows and overage flags.
+	for key := range headers {
+		if strings.HasPrefix(strings.ToLower(key), "anthropic-ratelimit-") {
+			headers.Del(key)
+		}
+	}
+	headers.Set("Anthropic-Ratelimit-Unified-Status", "rejected")
+	headers.Set("Anthropic-Ratelimit-Unified-Reset", strconv.FormatInt(deadline, 10))
+	headers.Set("Anthropic-Ratelimit-Unified-Representative-Claim", "unknown")
+}
+
+// claudeResetSkewSeconds tolerates the clock tick between building the
+// cooldown headers and writing the response.
+const claudeResetSkewSeconds = 2
